@@ -105,6 +105,16 @@ class MultiModalDataBuiltins(TypedDict, total=False):
 
     audio: ModalityData[AudioItem]
     """The input audio(s)."""
+    
+    # UUID fields for caching optimization
+    image_uuids: ModalityData[str]
+    """User-provided UUIDs for image cache optimization."""
+    
+    video_uuids: ModalityData[str]
+    """User-provided UUIDs for video cache optimization."""
+    
+    audio_uuids: ModalityData[str]
+    """User-provided UUIDs for audio cache optimization."""
 
 
 MultiModalDataDict: TypeAlias = Mapping[str, ModalityData[Any]]

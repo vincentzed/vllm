@@ -1021,6 +1021,28 @@ class ProcessingCache:
             value=self._cache.get(cache_key),
         )
 
+    def get_by_key(self, cache_key: str) -> Optional[MultiModalKwargsItem]:
+        """
+        Get a processed multi-modal item from the cache using a direct cache key.
+        
+        This method is used for UUID-based cache lookups where the cache key
+        is already known (e.g., when using UUIDs as direct cache keys).
+        
+        Args:
+            cache_key: The direct cache key to lookup
+            
+        Returns:
+            The cached item if found, None otherwise
+        """
+        self._maybe_log_cache_stats()
+        
+        if self.debug_cache_hit_ratio_steps:
+            if cache_key in self._cache:
+                self.debug_cache_hits += 1
+            self.debug_cache_total += 1
+        
+        return self._cache.get(cache_key)
+
     def put(
         self,
         model_id: str,
@@ -1220,12 +1242,29 @@ class BaseMultiModalProcessor(ABC, Generic[_I]):
         before passing them to
         [`_get_hf_mm_data`][vllm.multimodal.processing.BaseMultiModalProcessor._get_hf_mm_data].
         """
+        # Handle UUID-only references (empty content with UUIDs)
+        if self._is_uuid_only_reference(mm_data):
+            return self._create_uuid_placeholder_items(mm_data)
+        
         mm_items = self.data_parser.parse_mm_data(mm_data)
 
         for modality, items in mm_items.items():
             self.validate_num_items(modality, len(items))
 
         return mm_items
+
+    def _is_uuid_only_reference(self, mm_data: MultiModalDataDict) -> bool:
+        """Check if this is a UUID-only cache reference with no actual content."""
+        has_uuids = any(key.endswith('_uuids') for key in mm_data)
+        has_content = any(key in ['image', 'video', 'audio'] for key in mm_data)
+        return has_uuids and not has_content
+
+    def _create_uuid_placeholder_items(self, mm_data: MultiModalDataDict) -> MultiModalDataItems:
+        """Create placeholder items for UUID-only references."""
+        from .parse import MultiModalDataItems
+        # For UUID-only references, return empty items
+        # The actual processing will be handled by the UUID cache lookup
+        return MultiModalDataItems()
 
     @abstractmethod
     def _get_mm_fields_config(
@@ -1823,6 +1862,29 @@ class BaseMultiModalProcessor(ABC, Generic[_I]):
 
         return prompt_ids, prompt, mm_placeholders
 
+    def _has_uuid_fields(self, mm_data: MultiModalDataDict) -> bool:
+        """Check if multimodal data contains any UUID fields."""
+        return any(key.endswith('_uuids') for key in mm_data)
+
+    def _create_uuid_hash_dict(
+        self, 
+        mm_data: MultiModalDataDict
+    ) -> Mapping[str, list[str]]:
+        """Create a hash dictionary from UUIDs in multimodal data."""
+        hash_dict = {}
+        
+        for modality in ['image', 'video', 'audio']:
+            uuid_key = f"{modality}_uuids"
+            if uuid_key in mm_data:
+                uuids = mm_data[uuid_key]
+                if isinstance(uuids, list):
+                    hash_dict[modality] = uuids
+                else:
+                    hash_dict[modality] = [uuids]
+        
+        return hash_dict
+
+
     def apply(
         self,
         prompt: Union[str, list[int]],
@@ -1844,23 +1906,53 @@ class BaseMultiModalProcessor(ABC, Generic[_I]):
         3. Extract information about the placeholder tokens from the
            processed token IDs.
         """
+        # NEW: UUID-based optimization - bypass expensive MediaConnector and content hashing
+        # but still do proper prompt processing for placeholder insertion
+        uuid_cache_kwargs = None
+        if self.cache is not None and return_mm_hashes and self._has_uuid_fields(mm_data):
+            cache_keys = MultiModalHasher.get_cache_keys_from_mm_data(mm_data)
+            if cache_keys:
+                cache_hits = [self.cache.get_by_key(key) for key in cache_keys]
+                if all(hit is not None for hit in cache_hits):
+                    # Full cache hit - we can reconstruct mm_kwargs directly
+                    try:
+                        non_null_hits = cast(list[MultiModalKwargsItem], cache_hits)
+                        uuid_cache_kwargs = MultiModalKwargs.from_items(non_null_hits)
+                    except (ValueError, KeyError):
+                        # Race condition: cache evicted between check and reconstruction
+                        pass
+
         mm_items = self._to_mm_items(mm_data)
 
         if tokenization_kwargs is None:
             tokenization_kwargs = {}
 
-        (
-            prompt_ids,
-            mm_kwargs,
-            mm_hashes,
-            is_update_applied,
-        ) = self._cached_apply_hf_processor(
-            prompt,
-            mm_items,
-            hf_processor_mm_kwargs,
-            tokenization_kwargs=tokenization_kwargs,
-            return_mm_hashes=return_mm_hashes,
-        )
+        # Use cached kwargs if available, otherwise process normally
+        if uuid_cache_kwargs is not None:
+            # UUID cache hit - skip HF processing but do prompt tokenization
+            if isinstance(prompt, str):
+                tokenizer = self.info.get_tokenizer()
+                prompt_ids = encode_tokens(tokenizer, prompt, add_special_tokens=False)
+            else:
+                prompt_ids = prompt
+            mm_kwargs = uuid_cache_kwargs
+            # Convert UUIDs to proper MultiModalHashDict format
+            mm_hashes = self._create_uuid_hash_dict(mm_data) if return_mm_hashes else None
+            is_update_applied = False  # Will need to apply prompt updates
+        else:
+            # Normal processing path
+            (
+                prompt_ids,
+                mm_kwargs,
+                mm_hashes,
+                is_update_applied,
+            ) = self._cached_apply_hf_processor(
+                prompt,
+                mm_items,
+                hf_processor_mm_kwargs,
+                tokenization_kwargs=tokenization_kwargs,
+                return_mm_hashes=return_mm_hashes,
+            )
 
         # NOTE: tokenization_kwargs are not required to init processor
         prompt_ids, prompt, mm_placeholders = self._maybe_apply_prompt_updates(

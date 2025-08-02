@@ -125,8 +125,20 @@ class CustomChatCompletionContentSimpleImageParam(TypedDict, total=False):
     {
         "image_url": "https://example.com/image.jpg"
     }
+    
+    With UUID for caching optimization:
+    {
+        "image_url": "https://example.com/image.jpg",
+        "uuid": "abcde"
+    }
+    
+    UUID-only cache reference (empty content):
+    {
+        "uuid": "abcde"
+    }
     """
-    image_url: Required[str]
+    image_url: str
+    uuid: str
 
 
 class CustomChatCompletionContentSimpleAudioParam(TypedDict, total=False):
@@ -136,19 +148,33 @@ class CustomChatCompletionContentSimpleAudioParam(TypedDict, total=False):
     {
         "audio_url": "https://example.com/audio.mp3"
     }
+    
+    With UUID for caching optimization:
+    {
+        "audio_url": "https://example.com/audio.mp3",
+        "uuid": "abcde"
+    }
     """
-    audio_url: Required[str]
+    audio_url: str
+    uuid: str
 
 
 class CustomChatCompletionContentSimpleVideoParam(TypedDict, total=False):
-    """A simpler version of the param that only accepts a plain audio_url.
+    """A simpler version of the param that only accepts a plain video_url.
 
     Example:
     {
         "video_url": "https://example.com/video.mp4"
     }
+    
+    With UUID for caching optimization:
+    {
+        "video_url": "https://example.com/video.mp4",
+        "uuid": "abcde"
+    }
     """
-    video_url: Required[str]
+    video_url: str
+    uuid: str
 
 
 class CustomThinkCompletionContentParam(TypedDict, total=False):
@@ -572,12 +598,29 @@ class BaseMultiModalItemTracker(ABC, Generic[_T]):
 
 
 class MultiModalItemTracker(BaseMultiModalItemTracker[object]):
+    def __init__(self, model_config: ModelConfig, tokenizer: AnyTokenizer):
+        super().__init__(model_config, tokenizer)
+        # Track UUIDs separately for cache optimization
+        self._uuids_by_modality = defaultdict[str, list[str]](list)
+        
+    def add_uuid(self, modality: str, uuid: str) -> None:
+        """Add a UUID for the given modality."""
+        self._uuids_by_modality[modality].append(uuid)
 
     def all_mm_data(self) -> Optional[MultiModalDataDict]:
-        if not self._items_by_modality:
+        if not self._items_by_modality and not self._uuids_by_modality:
             return None
         mm_inputs = {}
         items_by_modality = dict(self._items_by_modality)
+        
+        # Add UUID fields to mm_inputs for cache optimization
+        if "image" in self._uuids_by_modality:
+            mm_inputs["image_uuids"] = self._uuids_by_modality["image"]
+        if "audio" in self._uuids_by_modality:
+            mm_inputs["audio_uuids"] = self._uuids_by_modality["audio"]
+        if "video" in self._uuids_by_modality:
+            mm_inputs["video_uuids"] = self._uuids_by_modality["video"]
+            
         if "image" in items_by_modality and "image_embeds" in items_by_modality:
             raise ValueError(\
                 "Mixing raw image and embedding inputs is not allowed")
@@ -601,15 +644,31 @@ class MultiModalItemTracker(BaseMultiModalItemTracker[object]):
 
 
 class AsyncMultiModalItemTracker(BaseMultiModalItemTracker[Awaitable[object]]):
+    def __init__(self, model_config: ModelConfig, tokenizer: AnyTokenizer):
+        super().__init__(model_config, tokenizer)
+        # Track UUIDs separately for cache optimization
+        self._uuids_by_modality = defaultdict[str, list[str]](list)
+        
+    def add_uuid(self, modality: str, uuid: str) -> None:
+        """Add a UUID for the given modality."""
+        self._uuids_by_modality[modality].append(uuid)
 
     async def all_mm_data(self) -> Optional[MultiModalDataDict]:
-        if not self._items_by_modality:
+        if not self._items_by_modality and not self._uuids_by_modality:
             return None
         mm_inputs = {}
         items_by_modality = {
                 modality: await asyncio.gather(*items)
                 for modality, items in self._items_by_modality.items()
             }
+            
+        # Add UUID fields to mm_inputs for cache optimization
+        if "image" in self._uuids_by_modality:
+            mm_inputs["image_uuids"] = self._uuids_by_modality["image"]
+        if "audio" in self._uuids_by_modality:
+            mm_inputs["audio_uuids"] = self._uuids_by_modality["audio"]
+        if "video" in self._uuids_by_modality:
+            mm_inputs["video_uuids"] = self._uuids_by_modality["video"]
 
         if "image" in items_by_modality and "image_embeds" in items_by_modality:
             raise ValueError(
@@ -656,7 +715,7 @@ class BaseMultiModalContentParser(ABC):
         return dict(self._placeholder_storage)
 
     @abstractmethod
-    def parse_image(self, image_url: str) -> None:
+    def parse_image(self, image_url: Union[str, dict[str, str]]) -> None:
         raise NotImplementedError
 
     @abstractmethod
@@ -669,7 +728,7 @@ class BaseMultiModalContentParser(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def parse_audio(self, audio_url: str) -> None:
+    def parse_audio(self, audio_url: Union[str, dict[str, str]]) -> None:
         raise NotImplementedError
 
     @abstractmethod
@@ -677,7 +736,7 @@ class BaseMultiModalContentParser(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def parse_video(self, video_url: str) -> None:
+    def parse_video(self, video_url: Union[str, dict[str, str]]) -> None:
         raise NotImplementedError
 
 
@@ -693,8 +752,24 @@ class MultiModalContentParser(BaseMultiModalContentParser):
             allowed_local_media_path=tracker.allowed_local_media_path,
         )
 
-    def parse_image(self, image_url: str) -> None:
-        image = self._connector.fetch_image(image_url)
+    def parse_image(self, image_url: Union[str, dict[str, str]]) -> None:
+        if isinstance(image_url, dict):
+            # Handle UUID for cache optimization
+            if "uuid" in image_url:
+                self._tracker.add_uuid("image", image_url["uuid"])
+                # Skip fetching if only UUID is provided (cache-only reference)
+                if "url" not in image_url or not image_url["url"]:
+                    placeholder = self._tracker.add("image", None)  # Placeholder for UUID-only
+                    self._add_placeholder("image", placeholder)
+                    return
+            url = image_url.get("url", "")
+            if url:
+                image = self._connector.fetch_image(url)
+            else:
+                # UUID-only reference, use None as placeholder
+                image = None
+        else:
+            image = self._connector.fetch_image(image_url)
 
         placeholder = self._tracker.add("image", image)
         self._add_placeholder("image", placeholder)
@@ -718,8 +793,24 @@ class MultiModalContentParser(BaseMultiModalContentParser):
         placeholder = self._tracker.add("image", image_pil)
         self._add_placeholder("image", placeholder)
 
-    def parse_audio(self, audio_url: str) -> None:
-        audio = self._connector.fetch_audio(audio_url)
+    def parse_audio(self, audio_url: Union[str, dict[str, str]]) -> None:
+        if isinstance(audio_url, dict):
+            # Handle UUID for cache optimization
+            if "uuid" in audio_url:
+                self._tracker.add_uuid("audio", audio_url["uuid"])
+                # Skip fetching if only UUID is provided (cache-only reference)
+                if "url" not in audio_url or not audio_url["url"]:
+                    placeholder = self._tracker.add("audio", None)  # Placeholder for UUID-only
+                    self._add_placeholder("audio", placeholder)
+                    return
+            url = audio_url.get("url", "")
+            if url:
+                audio = self._connector.fetch_audio(url)
+            else:
+                # UUID-only reference, use None as placeholder
+                audio = None
+        else:
+            audio = self._connector.fetch_audio(audio_url)
 
         placeholder = self._tracker.add("audio", audio)
         self._add_placeholder("audio", placeholder)
@@ -731,8 +822,24 @@ class MultiModalContentParser(BaseMultiModalContentParser):
 
         return self.parse_audio(audio_url)
 
-    def parse_video(self, video_url: str) -> None:
-        video = self._connector.fetch_video(video_url=video_url)
+    def parse_video(self, video_url: Union[str, dict[str, str]]) -> None:
+        if isinstance(video_url, dict):
+            # Handle UUID for cache optimization
+            if "uuid" in video_url:
+                self._tracker.add_uuid("video", video_url["uuid"])
+                # Skip fetching if only UUID is provided (cache-only reference)
+                if "url" not in video_url or not video_url["url"]:
+                    placeholder = self._tracker.add("video", None)  # Placeholder for UUID-only
+                    self._add_placeholder("video", placeholder)
+                    return
+            url = video_url.get("url", "")
+            if url:
+                video = self._connector.fetch_video(video_url=url)
+            else:
+                # UUID-only reference, use None as placeholder
+                video = None
+        else:
+            video = self._connector.fetch_video(video_url=video_url)
 
         placeholder = self._tracker.add("video", video)
         self._add_placeholder("video", placeholder)
@@ -749,8 +856,28 @@ class AsyncMultiModalContentParser(BaseMultiModalContentParser):
             allowed_local_media_path=tracker.allowed_local_media_path
         )
 
-    def parse_image(self, image_url: str) -> None:
-        image_coro = self._connector.fetch_image_async(image_url)
+    def parse_image(self, image_url: Union[str, dict[str, str]]) -> None:
+        if isinstance(image_url, dict):
+            # Handle UUID for cache optimization
+            if "uuid" in image_url:
+                self._tracker.add_uuid("image", image_url["uuid"])
+                # Skip fetching if only UUID is provided (cache-only reference)
+                if "url" not in image_url or not image_url["url"]:
+                    future: asyncio.Future[None] = asyncio.Future()
+                    future.set_result(None)
+                    placeholder = self._tracker.add("image", future)  # Placeholder for UUID-only
+                    self._add_placeholder("image", placeholder)
+                    return
+            url = image_url.get("url", "")
+            if url:
+                image_coro = self._connector.fetch_image_async(url)
+            else:
+                # UUID-only reference, use None as placeholder
+                future: asyncio.Future[None] = asyncio.Future()
+                future.set_result(None)
+                image_coro = future
+        else:
+            image_coro = self._connector.fetch_image_async(image_url)
 
         placeholder = self._tracker.add("image", image_coro)
         self._add_placeholder("image", placeholder)
@@ -781,8 +908,28 @@ class AsyncMultiModalContentParser(BaseMultiModalContentParser):
         placeholder = self._tracker.add("image", future)
         self._add_placeholder("image", placeholder)
 
-    def parse_audio(self, audio_url: str) -> None:
-        audio_coro = self._connector.fetch_audio_async(audio_url)
+    def parse_audio(self, audio_url: Union[str, dict[str, str]]) -> None:
+        if isinstance(audio_url, dict):
+            # Handle UUID for cache optimization
+            if "uuid" in audio_url:
+                self._tracker.add_uuid("audio", audio_url["uuid"])
+                # Skip fetching if only UUID is provided (cache-only reference)
+                if "url" not in audio_url or not audio_url["url"]:
+                    future: asyncio.Future[None] = asyncio.Future()
+                    future.set_result(None)
+                    placeholder = self._tracker.add("audio", future)  # Placeholder for UUID-only
+                    self._add_placeholder("audio", placeholder)
+                    return
+            url = audio_url.get("url", "")
+            if url:
+                audio_coro = self._connector.fetch_audio_async(url)
+            else:
+                # UUID-only reference, use None as placeholder
+                future: asyncio.Future[None] = asyncio.Future()
+                future.set_result(None)
+                audio_coro = future
+        else:
+            audio_coro = self._connector.fetch_audio_async(audio_url)
 
         placeholder = self._tracker.add("audio", audio_coro)
         self._add_placeholder("audio", placeholder)
@@ -794,8 +941,28 @@ class AsyncMultiModalContentParser(BaseMultiModalContentParser):
 
         return self.parse_audio(audio_url)
 
-    def parse_video(self, video_url: str) -> None:
-        video = self._connector.fetch_video_async(video_url=video_url)
+    def parse_video(self, video_url: Union[str, dict[str, str]]) -> None:
+        if isinstance(video_url, dict):
+            # Handle UUID for cache optimization
+            if "uuid" in video_url:
+                self._tracker.add_uuid("video", video_url["uuid"])
+                # Skip fetching if only UUID is provided (cache-only reference)
+                if "url" not in video_url or not video_url["url"]:
+                    future: asyncio.Future[None] = asyncio.Future()
+                    future.set_result(None)
+                    placeholder = self._tracker.add("video", future)  # Placeholder for UUID-only
+                    self._add_placeholder("video", placeholder)
+                    return
+            url = video_url.get("url", "")
+            if url:
+                video = self._connector.fetch_video_async(video_url=url)
+            else:
+                # UUID-only reference, use None as placeholder
+                future: asyncio.Future[None] = asyncio.Future()
+                future.set_result(None)
+                video = future
+        else:
+            video = self._connector.fetch_video_async(video_url=video_url)
 
         placeholder = self._tracker.add("video", video)
         self._add_placeholder("video", placeholder)
@@ -945,6 +1112,34 @@ _ResponsesInputImageParser = TypeAdapter(
     ResponseInputImageParam).validate_python
 _ContentPart: TypeAlias = Union[str, dict[str, str], InputAudio, PILImage]
 
+
+def _parse_image_url_with_uuid(parsed_part: dict[str, Any]) -> dict[str, str]:
+    """Extract both URL and UUID from image_url part."""
+    image_url_data = parsed_part.get("image_url", {})
+    result = {"url": image_url_data.get("url", "")}
+    if "uuid" in parsed_part:
+        result["uuid"] = parsed_part["uuid"]
+    return result
+
+
+def _parse_audio_url_with_uuid(parsed_part: dict[str, Any]) -> dict[str, str]:
+    """Extract both URL and UUID from audio_url part."""
+    audio_url_data = parsed_part.get("audio_url", {})
+    result = {"url": audio_url_data.get("url", "")}
+    if "uuid" in parsed_part:
+        result["uuid"] = parsed_part["uuid"]
+    return result
+
+
+def _parse_video_url_with_uuid(parsed_part: dict[str, Any]) -> dict[str, str]:
+    """Extract both URL and UUID from video_url part."""
+    video_url_data = parsed_part.get("video_url", {})
+    result = {"url": video_url_data.get("url", "")}
+    if "uuid" in parsed_part:
+        result["uuid"] = parsed_part["uuid"]
+    return result
+
+
 # Define a mapping from part types to their corresponding parsing functions.
 MM_PARSER_MAP: dict[
     str,
@@ -959,18 +1154,18 @@ MM_PARSER_MAP: dict[
     "input_image":
     lambda part: _ResponsesInputImageParser(part).get("image_url", None),
     "image_url":
-    lambda part: _ImageParser(part).get("image_url", {}).get("url", None),
+    lambda part: _parse_image_url_with_uuid(_ImageParser(part)),
     "image_embeds":
     lambda part: _ImageEmbedsParser(part).get("image_embeds", None),
     "image_pil": lambda part: _PILImageParser(part).get("image_pil", None),
     "audio_url":
-    lambda part: _AudioParser(part).get("audio_url", {}).get("url", None),
+    lambda part: _parse_audio_url_with_uuid(_AudioParser(part)),
     "input_audio":
     lambda part: _InputAudioParser(part).get("input_audio", None),
     "refusal":
     lambda part: _RefusalParser(part).get("refusal", None),
     "video_url":
-    lambda part: _VideoParser(part).get("video_url", {}).get("url", None),
+    lambda part: _parse_video_url_with_uuid(_VideoParser(part)),
 }
 
 
@@ -1008,21 +1203,47 @@ def _parse_chat_message_content_mm_part(
     # Handle missing 'type' but provided direct URL fields.
     # 'type' is required field by pydantic
     if part_type is None:
+        # Handle UUID-only references first
+        if part.get("uuid") is not None and len(part) == 1:
+            # Pure UUID reference without URL - need to infer type from context
+            # Default to image_url for now, but this should ideally be specified
+            return "image_url", {"uuid": part["uuid"]}
+        
         if part.get("image_url") is not None:
             image_params = cast(CustomChatCompletionContentSimpleImageParam,
                                 part)
-            return "image_url", image_params.get("image_url", "")
+            result = {"url": image_params.get("image_url", "")}
+            if "uuid" in image_params:
+                result["uuid"] = image_params["uuid"]
+            return "image_url", result
         if part.get("audio_url") is not None:
             audio_params = cast(CustomChatCompletionContentSimpleAudioParam,
                                 part)
-            return "audio_url", audio_params.get("audio_url", "")
+            result = {"url": audio_params.get("audio_url", "")}
+            if "uuid" in audio_params:
+                result["uuid"] = audio_params["uuid"]
+            return "audio_url", result
         if part.get("input_audio") is not None:
             input_audio_params = cast(dict[str, str], part)
             return "input_audio", input_audio_params
         if part.get("video_url") is not None:
             video_params = cast(CustomChatCompletionContentSimpleVideoParam,
                                 part)
-            return "video_url", video_params.get("video_url", "")
+            result = {"url": video_params.get("video_url", "")}
+            if "uuid" in video_params:
+                result["uuid"] = video_params["uuid"]
+            return "video_url", result
+        # Handle UUID-only references for specific modalities
+        if "uuid" in part:
+            # Check for modality-specific UUID references
+            if "image_uuid" in part or part.get("type") == "image":
+                return "image_url", {"uuid": part["uuid"]}
+            elif "audio_uuid" in part or part.get("type") == "audio":
+                return "audio_url", {"uuid": part["uuid"]}
+            elif "video_uuid" in part or part.get("type") == "video":
+                return "video_url", {"uuid": part["uuid"]}
+            # Default to image for generic UUID
+            return "image_url", {"uuid": part["uuid"]}
         # Raise an error if no 'type' or direct URL is found.
         raise ValueError("Missing 'type' field in multimodal part.")
 
@@ -1113,24 +1334,24 @@ def _parse_chat_message_content_part(
         mm_parser.parse_image_pil(image_content)
         modality = "image"
     elif part_type in ("image_url", "input_image"):
-        str_content = cast(str, content)
-        mm_parser.parse_image(str_content)
+        # content can now be str or dict[str, str] (with UUID)
+        mm_parser.parse_image(content)
         modality = "image"
     elif part_type == "image_embeds":
         content = cast(Union[str, dict[str, str]], content)
         mm_parser.parse_image_embeds(content)
         modality = "image"
     elif part_type == "audio_url":
-        str_content = cast(str, content)
-        mm_parser.parse_audio(str_content)
+        # content can now be str or dict[str, str] (with UUID)
+        mm_parser.parse_audio(content)
         modality = "audio"
     elif part_type == "input_audio":
         dict_content = cast(InputAudio, content)
         mm_parser.parse_input_audio(dict_content)
         modality = "audio"
     elif part_type == "video_url":
-        str_content = cast(str, content)
-        mm_parser.parse_video(str_content)
+        # content can now be str or dict[str, str] (with UUID)
+        mm_parser.parse_video(content)
         modality = "video"
     else:
         raise NotImplementedError(f"Unknown part type: {part_type}")

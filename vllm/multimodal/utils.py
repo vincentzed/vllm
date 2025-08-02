@@ -287,6 +287,7 @@ class MediaConnector:
         return image_embedding_io.load_base64("", data)
 
 
+
 def encode_audio_base64(
     audio: np.ndarray,
     sampling_rate: float,
