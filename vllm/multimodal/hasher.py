@@ -23,6 +23,45 @@ A dictionary containing hashes for items in each modality.
 
 class MultiModalHasher:
 
+    @classmethod  
+    def get_cache_keys_from_mm_data(cls, mm_data: Mapping[str, object]) -> list[str]:
+        """Extract cache keys from multimodal data, preferring UUIDs."""
+        cache_keys = []
+        
+        # Check for UUID fields first
+        for modality in ['image', 'video', 'audio']:
+            uuid_key = f"{modality}_uuids"
+            if uuid_key in mm_data:
+                uuids = mm_data[uuid_key]
+                if isinstance(uuids, list):
+                    cache_keys.extend(uuids)
+                else:
+                    cache_keys.append(uuids)
+        
+        # If no UUIDs found, fall back to URL-optimized hashing
+        if not cache_keys:
+            return [cls._hash_with_url_optimization(**mm_data)]
+            
+        return cache_keys
+
+    @classmethod
+    def _hash_with_url_optimization(cls, **kwargs: object) -> str:
+        """
+        Hash multimodal data with URL-only optimization when possible.
+        For URL-based inputs, hash only the URL instead of full content.
+        """
+        optimized_kwargs: dict[str, object] = {}
+        
+        for key, value in kwargs.items():
+            # For URL-based inputs, hash only the URL
+            if key.endswith('_url') and isinstance(value, str):
+                optimized_kwargs[key] = value
+            # For other inputs, use full content hashing
+            else:
+                optimized_kwargs[key] = value
+                
+        return cls.hash_kwargs(**optimized_kwargs)
+
     @classmethod
     def serialize_item(cls, obj: object) -> Union[bytes, memoryview]:
         # Simple cases
