@@ -165,6 +165,9 @@ class StreamingHarmonyContext(HarmonyContext):
 
     def append_output(self, output) -> None:
         if isinstance(output, RequestOutput):
+            # Keep a reference to the latest request output so callers
+            # (e.g. streaming responses) can access token logprobs.
+            self.last_output = output
             tok = output.outputs[0].token_ids[0]
             self.parser.process(tok)
             self.last_tok = tok

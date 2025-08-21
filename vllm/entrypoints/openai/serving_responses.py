@@ -538,11 +538,24 @@ class OpenAIServingResponses(OpenAIServing):
             )
             output.append(reasoning_item)
         if content:
+            include_logprobs = (
+                request.include is not None and
+                "message.output_text.logprobs" in (request.include or [])
+            )
+            resp_logprobs = None
+            if include_logprobs and request.top_logprobs and \
+                    final_output.logprobs is not None:
+                resp_logprobs = self._create_responses_logprobs(
+                    token_ids=list(final_output.token_ids),
+                    top_logprobs=list(final_output.logprobs),
+                    tokenizer=tokenizer,
+                    num_output_top_logprobs=request.top_logprobs,
+                )
             output_text = ResponseOutputText(
                 text=content,
                 annotations=[],  # TODO
                 type="output_text",
-                logprobs=None,  # TODO
+                logprobs=resp_logprobs,
             )
             message = ResponseOutputMessage(
                 id=f"msg_{random_uuid()}",
@@ -834,6 +847,16 @@ class OpenAIServingResponses(OpenAIServing):
                 response=initial_response,
             ))
 
+        # Include logprobs for streaming if requested
+        include_stream_logprobs = (
+            request.include is not None and
+            "message.output_text.logprobs" in (request.include or []) and
+            (request.top_logprobs or 0) > 0
+        )
+
+        # Accumulate logprobs for the current output_text (final channel)
+        current_text_logprobs: list[dict[str, Any]] = []
+
         async for ctx in result_generator:
 
             assert isinstance(ctx, StreamingHarmonyContext)
@@ -881,6 +904,8 @@ class OpenAIServingResponses(OpenAIServing):
                             type="output_text",
                             text=previous_item.content[0].text,
                             annotations=[],
+                            logprobs=(current_text_logprobs
+                                      if include_stream_logprobs else None),
                         )
                         yield _send_event(
                             openai_responses_types.ResponseTextDoneEvent(
@@ -889,7 +914,8 @@ class OpenAIServingResponses(OpenAIServing):
                                 output_index=current_output_index,
                                 content_index=current_content_index,
                                 text=previous_item.content[0].text,
-                                logprobs=[],
+                                logprobs=(current_text_logprobs
+                                          if include_stream_logprobs else None),
                                 item_id=current_item_id,
                             ))
                         yield _send_event(
@@ -915,6 +941,8 @@ class OpenAIServingResponses(OpenAIServing):
                                     status="completed",
                                 ),
                             ))
+                        # Reset for next item
+                        current_text_logprobs = []
 
             if ctx.parser.last_content_delta:
                 if (ctx.parser.current_channel == "final"
@@ -948,9 +976,22 @@ class OpenAIServingResponses(OpenAIServing):
                                     type="output_text",
                                     text="",
                                     annotations=[],
-                                    logprobs=[],
+                                    logprobs=([] if include_stream_logprobs else None),
                                 ),
                             ))
+                    # Build per-delta token logprobs
+                    delta_logprobs = None
+                    if include_stream_logprobs and isinstance(ctx, StreamingHarmonyContext):
+                        if ctx.last_output is not None:
+                            out = ctx.last_output.outputs[0]
+                            delta_logprobs = self._create_responses_logprobs(
+                                token_ids=list(out.token_ids),
+                                top_logprobs=list(out.logprobs or []),
+                                tokenizer=tokenizer,
+                                num_output_top_logprobs=request.top_logprobs or 0,
+                            )
+                            current_text_logprobs.extend(delta_logprobs)
+
                     yield _send_event(
                         openai_responses_types.ResponseTextDeltaEvent(
                             type="response.output_text.delta",
@@ -959,8 +1000,7 @@ class OpenAIServingResponses(OpenAIServing):
                             output_index=current_output_index,
                             item_id=current_item_id,
                             delta=ctx.parser.last_content_delta,
-                            # TODO, use logprobs from ctx.last_request_output
-                            logprobs=[],
+                            logprobs=delta_logprobs,
                         ))
                 elif (ctx.parser.current_channel == "analysis"
                       and ctx.parser.current_recipient is None):
@@ -992,7 +1032,7 @@ class OpenAIServingResponses(OpenAIServing):
                                     type="output_text",
                                     text="",
                                     annotations=[],
-                                    logprobs=[],
+                                    logprobs=None,
                                 ),
                             ))
                     yield _send_event(
