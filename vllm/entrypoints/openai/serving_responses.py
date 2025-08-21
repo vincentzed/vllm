@@ -581,6 +581,68 @@ class OpenAIServingResponses(OpenAIServing):
             output_items.extend(last_items)
         return output_items
 
+    def _create_responses_logprobs(
+        self,
+        token_ids: list[int],
+        top_logprobs: list[Optional[dict[int, Any]]],
+        tokenizer: AnyTokenizer,
+        num_output_top_logprobs: int,
+    ) -> list[dict[str, Any]]:
+        """Create logprobs for OpenAI Responses API.
+        
+        Returns a list of dictionaries, one per token, with format:
+        {
+            "token": str,
+            "logprob": float,
+            "top_logprobs": [{"token": str, "logprob": float}, ...]
+        }
+        """
+        from vllm.outputs import Logprob
+        
+        result_logprobs = []
+        
+        for token_id, token_logprob_dict in zip(token_ids, top_logprobs):
+            if token_logprob_dict is None:
+                continue
+                
+            # Get the token string
+            token_str = tokenizer.decode([token_id])
+            
+            # Get the logprob for this token
+            token_logprob = token_logprob_dict.get(token_id)
+            if token_logprob is None:
+                # Token not in top logprobs, skip
+                continue
+                
+            logprob_value = (token_logprob.logprob 
+                           if isinstance(token_logprob, Logprob) 
+                           else token_logprob)
+            
+            # Build top_logprobs list
+            top_logprobs_list = []
+            for alt_token_id, alt_logprob in token_logprob_dict.items():
+                if len(top_logprobs_list) >= num_output_top_logprobs:
+                    break
+                alt_token_str = tokenizer.decode([alt_token_id])
+                alt_logprob_value = (alt_logprob.logprob 
+                                   if isinstance(alt_logprob, Logprob) 
+                                   else alt_logprob)
+                top_logprobs_list.append({
+                    "token": alt_token_str,
+                    "logprob": alt_logprob_value
+                })
+            
+            # Sort by logprob (descending)
+            top_logprobs_list.sort(key=lambda x: x["logprob"], reverse=True)
+            
+            result_logprobs.append({
+                "token": token_str,
+                "logprob": logprob_value,
+                "top_logprobs": top_logprobs_list[:num_output_top_logprobs]
+            })
+        
+        return result_logprobs
+
     def _construct_input_messages(
         self,
         request: ResponsesRequest,
