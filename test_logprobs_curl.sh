@@ -29,20 +29,23 @@ echo ""
 echo ""
 echo "2. STREAMING REQUEST WITH LOGPROBS:"
 echo "------------------------------------"
+echo "NOTE: Streaming is currently not supported without Harmony."
+echo "Skipping streaming test..."
 echo ""
 
-curl -X POST http://localhost:8000/v1/responses \
-  -H "Authorization: Bearer token-abc123" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-    "input": "Say hello in three languages",
-    "max_tokens": 50,
-    "temperature": 0.7,
-    "top_logprobs": 3,
-    "include": ["message.output_text.logprobs"],
-    "stream": true
-  }'
+# Uncomment below when streaming is supported
+# curl -X POST http://localhost:8000/v1/responses \
+#   -H "Authorization: Bearer token-abc123" \
+#   -H "Content-Type: application/json" \
+#   -d '{
+#     "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+#     "input": "Say hello in three languages",
+#     "max_tokens": 50,
+#     "temperature": 0.7,
+#     "top_logprobs": 3,
+#     "include": ["message.output_text.logprobs"],
+#     "stream": true
+#   }'
 
 echo ""
 echo ""

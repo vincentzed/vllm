@@ -184,8 +184,12 @@ if __name__ == "__main__":
         # Test non-streaming
         test_responses_api_with_logprobs()
         
-        # Test streaming
-        test_responses_api_streaming_with_logprobs()
+        # Test streaming (NOTE: Currently not supported without Harmony)
+        print("\n" + "=" * 60)
+        print("NOTE: Streaming is currently not supported without Harmony")
+        print("Skipping streaming test...")
+        print("=" * 60)
+        # test_responses_api_streaming_with_logprobs()
         
     except requests.exceptions.ConnectionError:
         print("\nError: Could not connect to vLLM server.")
