@@ -17,12 +17,14 @@ curl -X POST http://localhost:8000/v1/responses \
   -H "Content-Type: application/json" \
   -d '{
     "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-    "messages": [
-      {
-        "role": "user",
-        "content": "What is the capital of France?"
-      }
-    ],
+    "input": {
+      "messages": [
+        {
+          "role": "user",
+          "content": "What is the capital of France?"
+        }
+      ]
+    },
     "max_tokens": 30,
     "temperature": 0.7,
     "top_logprobs": 5,
@@ -41,12 +43,14 @@ curl -X POST http://localhost:8000/v1/responses \
   -H "Content-Type: application/json" \
   -d '{
     "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-    "messages": [
-      {
-        "role": "user",
-        "content": "Say hello in three languages"
-      }
-    ],
+    "input": {
+      "messages": [
+        {
+          "role": "user",
+          "content": "Say hello in three languages"
+        }
+      ]
+    },
     "max_tokens": 50,
     "temperature": 0.7,
     "top_logprobs": 3,

@@ -31,12 +31,14 @@ def test_responses_api_with_logprobs():
     # - include: must contain "message.output_text.logprobs" to get logprobs
     payload = {
         "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-        "messages": [
-            {
-                "role": "user",
-                "content": "What is 2+2?"
-            }
-        ],
+        "input": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "What is 2+2?"
+                }
+            ]
+        },
         "max_tokens": 50,
         "temperature": 0.7,
         "top_logprobs": 5,  # Request top 5 logprobs for each token
@@ -98,12 +100,14 @@ def test_responses_api_streaming_with_logprobs():
     
     payload = {
         "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-        "messages": [
-            {
-                "role": "user",
-                "content": "Count from 1 to 5."
-            }
-        ],
+        "input": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Count from 1 to 5."
+                }
+            ]
+        },
         "max_tokens": 50,
         "temperature": 0.7,
         "top_logprobs": 3,  # Request top 3 logprobs for each token
