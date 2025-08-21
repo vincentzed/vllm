@@ -31,14 +31,7 @@ def test_responses_api_with_logprobs():
     # - include: must contain "message.output_text.logprobs" to get logprobs
     payload = {
         "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-        "input": {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": "What is 2+2?"
-                }
-            ]
-        },
+        "input": "What is 2+2? Please provide a short answer.",
         "max_tokens": 50,
         "temperature": 0.7,
         "top_logprobs": 5,  # Request top 5 logprobs for each token
@@ -60,29 +53,30 @@ def test_responses_api_with_logprobs():
         print(f"\nResponse status: {response.status_code}")
         print(f"\nFull response:\n{json.dumps(result, indent=2)}")
         
-        # Extract and display logprobs
-        if "outputs" in result:
-            for idx, output in enumerate(result["outputs"]):
+        # Extract and display logprobs - handle the responses API format
+        if "output" in result:
+            for idx, output_item in enumerate(result["output"]):
                 print(f"\n--- Output {idx} ---")
-                for item in output:
-                    if item["type"] == "output_text":
-                        print(f"Text: {item.get('text', '')}")
-                        
-                        # Extract logprobs if present
-                        if "logprobs" in item and item["logprobs"]:
-                            print("\nLogprobs for each token:")
-                            for token_idx, token_logprobs in enumerate(item["logprobs"]):
-                                print(f"\n  Token {token_idx}:")
-                                print(f"    Token: '{token_logprobs.get('token', '')}'")
-                                print(f"    Logprob: {token_logprobs.get('logprob', 'N/A')}")
-                                
-                                # Show top alternatives
-                                if "top_logprobs" in token_logprobs:
-                                    print("    Top alternatives:")
-                                    for alt in token_logprobs["top_logprobs"]:
-                                        print(f"      '{alt['token']}': {alt['logprob']:.4f}")
-                        else:
-                            print("No logprobs in response (check if 'include' parameter is set correctly)")
+                if output_item.get("type") == "message" and "content" in output_item:
+                    for content_item in output_item["content"]:
+                        if content_item.get("type") == "output_text":
+                            print(f"Text: {content_item.get('text', '')}")
+                            
+                            # Extract logprobs if present
+                            if "logprobs" in content_item and content_item["logprobs"]:
+                                print("\nLogprobs for each token:")
+                                for token_idx, token_logprobs in enumerate(content_item["logprobs"]):
+                                    print(f"\n  Token {token_idx}:")
+                                    print(f"    Token: '{token_logprobs.get('token', '')}'")
+                                    print(f"    Logprob: {token_logprobs.get('logprob', 'N/A')}")
+                                    
+                                    # Show top alternatives
+                                    if "top_logprobs" in token_logprobs:
+                                        print("    Top alternatives:")
+                                        for alt in token_logprobs["top_logprobs"]:
+                                            print(f"      '{alt['token']}': {alt['logprob']:.4f}")
+                            else:
+                                print("No logprobs in response (check if 'include' parameter is set correctly)")
     else:
         print(f"\nError: {response.status_code}")
         print(response.text)
@@ -100,14 +94,7 @@ def test_responses_api_streaming_with_logprobs():
     
     payload = {
         "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-        "input": {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": "Count from 1 to 5."
-                }
-            ]
-        },
+        "input": "Count from 1 to 5.",
         "max_tokens": 50,
         "temperature": 0.7,
         "top_logprobs": 3,  # Request top 3 logprobs for each token
